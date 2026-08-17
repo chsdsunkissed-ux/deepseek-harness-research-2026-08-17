@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSeek Harness（dsh）全景调研报告</title>
+<meta name="description" content="---">
+<style>
+:root {
+  --bg: #0a0e14;
+  --bg-2: #11151c;
+  --fg: #f1f5fb;
+  --fg-muted: #a8b3c0;
+  --fg-strong: #ffffff;
+  --accent: #a78bfa;
+  --accent-2: #22d3ee;
+  --accent-3: #fbbf24;
+  --accent-h1: #fbbf24;
+  --accent-h2: #a78bfa;
+  --accent-h3: #22d3ee;
+  --accent-h4: #34d399;
+  --border: #21262d;
+  --code-bg: #161b22;
+  --code-kw: #ff8a80;
+  --code-str: #a5d6ff;
+  --code-num: #79c0ff;
+  --code-com: #a8b3c0;
+  --code-fn: #d2a8ff;
+  --code-cls: #ffa657;
+  --code-var: #7ee787;
+  --highlight: #fbbf2426;
+  /* v3 字体栈：CJK 优先，标题用 serif 加强视觉 */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+               "Source Han Sans CN", sans-serif;
+  --font-serif: "Source Han Serif CN", "Noto Serif CJK SC", "Songti SC",
+                "STSong", "SimSun", Georgia, "Times New Roman", serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", "Fira Code",
+                Monaco, Consolas, "Source Han Mono SC", monospace;
+}
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-2: #f6f8fa;
+  --fg: #0d1117;
+  --fg-muted: #424a53;
+  --fg-strong: #000000;
+  --accent: #6d28d9;
+  --accent-2: #0e7490;
+  --accent-3: #b45309;
+  --accent-h1: #b45309;
+  --accent-h2: #6d28d9;
+  --accent-h3: #0e7490;
+  --accent-h4: #047857;
+  --border: #d0d7de;
+  --code-bg: #f6f8fa;
+  --code-kw: #cf222e;
+  --code-str: #0a3069;
+  --code-num: #0550ae;
+  --code-com: #6e7781;
+  --code-fn: #8250df;
+  --code-cls: #953800;
+  --code-var: #116329;
+  --highlight: #fef3c7;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; scroll-padding-top: 60px; }
+/* v4: 基础字号 18px + 行高 2.0 + 字间距优化（老花眼无障碍） */
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 18px;            /* v3 16px → v4 18px（老花眼易读） */
+  line-height: 2.0;           /* v3 1.75 → v4 2.0（行间呼吸感） */
+  letter-spacing: 0.01em;     /* 微调字间距 */
+  transition: background 0.3s ease, color 0.3s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* v3 阅读进度条（页面顶部） */
+.read-progress {
+  position: fixed;
+  top: 0; left: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  z-index: 1000;
+  width: 0%;
+  transition: width 0.1s ease;
+}
+
+/* v3 主题切换按钮（右上角固定） */
+.theme-toggle {
+  position: fixed;
+  top: 16px; right: 20px;
+  width: 36px; height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-2);
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 999;
+  font-size: 18px;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+.theme-toggle:hover { transform: rotate(20deg); color: var(--accent); }
+
+/* v3 回到顶部按钮 */
+.scroll-top {
+  position: fixed;
+  bottom: 30px; right: 20px;
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  z-index: 998;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+.scroll-top.visible { opacity: 1; pointer-events: auto; }
+.scroll-top:hover { transform: translateY(-2px); }
+
+/* v4 主布局：内容更窄（短行易读）+ 更大留白 */
+.container {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 50px 24px 80px;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 40px;
+}
+/* v4 内容区：max-width 720px（每行约 40-45 字符，老花眼易读） */
+.content { max-width: 720px; min-width: 0; }
+
+/* v4 TOC 侧栏：字号 1em（不再缩小）+ 更易读的视觉 */
+.toc {
+  position: sticky;
+  top: 70px;
+  height: fit-content;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  padding: 1.2em 1.1em;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 1em;               /* v3 0.85em → v4 1em（不再缩小） */
+}
+.toc::-webkit-scrollbar { width: 4px; }
+.toc::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.toc-header {
+  font-weight: 700; color: var(--accent);
+  margin-bottom: 0.5em; font-size: 1.05em;
+  display: flex; align-items: center; gap: 6px;
+}
+.toc-header::before { content: "📑"; }
+.toc-meta {
+  color: var(--fg-muted); font-size: 0.9em;
+  margin-bottom: 0.8em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5em;
+}
+.toc ul { list-style: none; padding-left: 0; }
+.toc li { margin: 0.5em 0; }   /* v3 0.4em → v4 0.5em */
+.toc a {
+  color: var(--fg-muted);
+  text-decoration: none;
+  display: block;
+  padding: 0.4em 0.6em;          /* v3 0.3em → v4 0.4em */
+  border-radius: 4px;
+  border-left: 2px solid transparent;
+  transition: all 0.2s ease;
+  font-size: 0.95em;
+}
+.toc a:hover {
+  color: var(--accent);
+  background: var(--bg);
+  border-left-color: var(--accent);
+}
+.toc a.active {
+  color: var(--accent);
+  background: var(--bg);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+.toc .lvl3 { padding-left: 1.2em; font-size: 0.95em; }
+
+/* v4 标题（按级别自动变更字号 + 都比正文大 + 老花眼易读）
+   字号阶梯（基于 18px 根字号）：
+     H1 = 3.0em = 54px   (50.4px 2.8em → 54px 3.0em)
+     H2 = 2.0em = 36px   (31.5px 1.75em → 36px 2.0em)
+     H3 = 1.6em = 28.8px (24.3px 1.35em → 28.8px 1.6em)
+     H4 = 1.3em = 23.4px (19.8px 1.1em → 23.4px 1.3em)
+     正文 = 18px (基准)
+   每个 H 都有专属亮色 + 实色左边框（老花眼易识别）*/
+h1 {
+  font-family: var(--font-serif);
+  font-size: 3.0em;            /* 54px (基础 18px × 3.0) */
+  font-weight: 800;
+  line-height: 1.25;
+  margin: 0 0 0.7em;
+  padding: 0.4em 0 0.5em 24px;
+  border-left: 8px solid var(--accent-h1);
+  color: var(--accent-h1);
+  letter-spacing: -0.02em;
+  text-shadow: 0 2px 8px rgba(251, 191, 36, 0.15);
+}
+h2 {
+  font-family: var(--font-serif);
+  font-size: 2.0em;            /* 36px */
+  font-weight: 700;
+  margin: 2em 0 0.7em;
+  padding: 0.3em 0 0.4em 18px;
+  position: relative;
+  counter-increment: h2-counter;
+  color: var(--accent-h2);
+  border-left: 5px solid var(--accent-h2);
+  border-bottom: 2px solid var(--border);
+  letter-spacing: -0.01em;
+}
+h2::before {
+  content: counter(h2-counter, decimal) ".";
+  color: var(--accent-h2);
+  font-weight: 800;
+  margin-right: 0.6em;
+  font-family: var(--font-mono);
+  font-size: 0.7em;
+  vertical-align: middle;
+  opacity: 0.85;
+}
+h2 a.anchor {
+  opacity: 0; margin-left: 8px; color: var(--fg-muted);
+  text-decoration: none; font-size: 0.7em;
+  transition: opacity 0.2s ease;
+}
+h2:hover a.anchor { opacity: 1; }
+h3 {
+  font-family: var(--font-serif);
+  font-size: 1.6em;            /* 28.8px */
+  font-weight: 700;
+  margin: 1.6em 0 0.6em;
+  padding-left: 14px;
+  color: var(--accent-h3);
+  counter-increment: h3-counter;
+  border-left: 4px solid var(--accent-h3);
+}
+h3::before {
+  content: counter(h3-counter, decimal) ".";
+  color: var(--accent-h3);
+  font-weight: 800;
+  margin-right: 0.5em;
+  font-family: var(--font-mono);
+  font-size: 0.7em;
+  vertical-align: middle;
+  opacity: 0.85;
+}
+h3 a.anchor { opacity: 0; margin-left: 6px; color: var(--fg-muted);
+                text-decoration: none; font-size: 0.7em; }
+h3:hover a.anchor { opacity: 1; }
+h4 {
+  font-family: var(--font-serif);
+  font-size: 1.3em;            /* 23.4px */
+  font-weight: 700;
+  margin: 1.3em 0 0.5em;
+  padding-left: 12px;
+  color: var(--accent-h4);
+  border-left: 3px solid var(--accent-h4);
+}
+h4 a.anchor { opacity: 0; margin-left: 6px; color: var(--fg-muted);
+                text-decoration: none; font-size: 0.7em; }
+h4:hover a.anchor { opacity: 1; }
+
+/* v4 正文段落：首行缩进 2em + 更大段间距（老花眼易读） */
+.content p {
+  margin: 0 0 1.6em;            /* v3 1.2em → v4 1.6em */
+  line-height: 2.0;             /* 继承 body line-height */
+  text-indent: 2em;
+}
+/* v3 首字下沉（可选） */
+.content p.drop-cap::first-letter {
+  font-family: var(--font-serif);
+  font-size: 2.5em;
+  font-weight: 700;
+  color: var(--accent);
+  float: left;
+  line-height: 1;
+  margin: 0.1em 0.15em 0 0;
+}
+
+/* v4 列表：更大字号 + 更易读的图标 */
+.content ul, .content ol {
+  padding-left: 2em;
+  margin: 1.2em 0;
+  font-size: 1em;               /* 显式继承 18px，不再缩小 */
+}
+.content ul li {
+  margin: 0.5em 0;              /* v3 0.4em → v4 0.5em */
+  list-style: none;
+  position: relative;
+}
+.content ul li::before {
+  content: "▸";
+  color: var(--accent);
+  position: absolute;
+  left: -1.2em;
+  font-weight: 700;
+  font-size: 1.1em;
+}
+.content ol li {
+  margin: 0.5em 0;
+  color: var(--fg);
+}
+.content ol li::marker { color: var(--accent); font-weight: 700; }
+
+/* v4 引用块：大引号 + 渐变左边 + 更大字号 */
+blockquote {
+  margin: 1.8em 0;
+  padding: 1.2em 1.5em 1.2em 2.8em;
+  border-left: 5px solid;
+  border-image: linear-gradient(180deg, var(--accent), var(--accent-2)) 1;
+  background: var(--bg-2);
+  color: var(--fg);
+  border-radius: 0 8px 8px 0;
+  font-style: italic;
+  position: relative;
+  font-size: 1.05em;            /* v4 引用块略大于正文 */
+  line-height: 1.9;
+}
+blockquote::before {
+  content: '\201C';  /* v3：大引号字符（避免 Python 三引号字符串冲突） */
+  position: absolute;
+  left: 0.2em; top: 0;
+  font-family: var(--font-serif);
+  font-size: 3.5em;
+  color: var(--accent);
+  opacity: 0.3;
+  line-height: 1;
+}
+blockquote p { text-indent: 0; }
+blockquote p + p { margin-top: 0.5em; }
+
+/* v4 行内代码：1.0em（不再缩小）+ 高对比色 */
+code {
+  font-family: var(--font-mono);
+  background: var(--code-bg);
+  color: var(--accent-h3);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 1.0em;              /* v3 0.9em → v4 1.0em */
+  border: 1px solid var(--border);
+  font-weight: 500;
+}
+
+/* v4 代码块：1.0em + 更宽 padding（行高+空间感） */
+pre {
+  background: var(--code-bg);
+  padding: 1.4em 1.6em;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+  margin: 1.4em 0;
+  line-height: 1.7;             /* v3 1.5 → v4 1.7（行高增加） */
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 1.0em;              /* v3 0.85em → v4 1.0em */
+}
+pre code {
+  background: none;
+  padding: 0;
+  border: none;
+  color: var(--fg);
+}
+/* v3 代码 token 着色（霓虹感） */
+.tok-kw { color: var(--code-kw); font-weight: 600; }
+.tok-str { color: var(--code-str); }
+.tok-num { color: var(--code-num); }
+.tok-com { color: var(--code-com); font-style: italic; }
+.tok-fn { color: var(--code-fn); }
+.tok-cls { color: var(--code-cls); font-weight: 600; }
+.tok-var { color: var(--code-var); }
+/* v3 代码块复制按钮 */
+.code-block-wrap {
+  position: relative;
+}
+.copy-btn {
+  position: absolute;
+  top: 8px; right: 8px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.75em;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.code-block-wrap:hover .copy-btn { opacity: 1; }
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.copy-btn.copied { color: var(--code-var); border-color: var(--code-var); }
+
+/* v4 表格：1.0em（不再缩小）+ 高对比 */
+.content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.6em 0;
+  font-size: 1.0em;              /* v3 0.95em → v4 1.0em */
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: block;
+  overflow-x: auto;
+}
+.content table thead { background: var(--bg-2); }
+.content table th, .content table td {
+  padding: 12px 16px;            /* v3 10px 14px → v4 12px 16px（更易点选） */
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.7;
+}
+.content table th {
+  font-weight: 700;              /* v3 600 → v4 700 */
+  color: var(--accent);
+}
+.content table tbody tr:hover { background: var(--bg-2); }
+.content table tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+
+/* v3 链接（下划线动画） */
+.content a {
+  color: var(--accent);
+  text-decoration: none;
+  position: relative;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+.content a:hover {
+  color: var(--accent-2);
+  border-bottom-color: var(--accent-2);
+}
+.content a::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: var(--accent-2);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.3s ease;
+}
+.content a:hover::after { transform: scaleX(1); }
+
+/* v3 图片 */
+.content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 1em 0;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+.content img:not([src^="data:"]) { background: var(--bg-2); padding: 8px; }
+
+/* v3 分隔线 */
+hr {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+  margin: 2.5em 0;
+}
+
+/* v3 进度条 */
+.progress-bar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 1em 0;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-radius: 2px;
+}
+
+/* v4 响应式：窄屏隐藏 TOC + 字号依然 ≥ 18px（不缩小） */
+@media (max-width: 900px) {
+  .container {
+    grid-template-columns: 1fr;
+    padding: 30px 18px 60px;
+  }
+  .toc {
+    position: relative;
+    top: 0;
+    max-height: 240px;
+    margin-bottom: 30px;
+  }
+  /* 窄屏下 h1 略缩（54px → 44px），但仍比正文 18px 大 2.4 倍 */
+  h1 { font-size: 2.4em; padding-left: 18px; }
+  h2 { font-size: 1.7em; padding-left: 14px; }
+  h3 { font-size: 1.4em; }
+  h4 { font-size: 1.2em; }
+  .content p { text-indent: 2em; }
+  .content ul, .content ol { padding-left: 1.5em; }
+  .scroll-top { width: 40px; height: 40px; bottom: 16px; right: 16px; }
+  .theme-toggle { top: 8px; right: 12px; width: 36px; height: 36px; }
+}
+/* v4 极窄屏（如 360px 老手机）字号微调 */
+@media (max-width: 480px) {
+  body { font-size: 17px; }   /* 17px 仍清晰，但小屏节省空间 */
+  h1 { font-size: 2.0em; }
+  h2 { font-size: 1.5em; }
+  h3 { font-size: 1.3em; }
+  h4 { font-size: 1.15em; }
+}
+
+/* 计数器 */
+.content { counter-reset: h2-counter h3-counter; }
+
+/* 滚动条美化 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); }
+
+/* 页脚 */
+.footer {
+  margin-top: 4em;
+  padding-top: 1.5em;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 0.85em;
+  text-align: center;
+}
+.footer a { color: var(--accent); border-bottom: 1px dashed var(--accent); }
+
+/* 暗色模式切换动画 */
+* { transition: background-color 0.3s ease, border-color 0.3s ease; }
+</style>
+</head>
+<body>
+<div class="read-progress" id="readProgress"></div>
+<button class="theme-toggle" id="themeToggle" title="切换主题">🌙</button>
+<button class="scroll-top" id="scrollTop" title="回到顶部">↑</button>
+
+<div class="container">
+<div class="toc">
+<div class="toc-header">目录</div>
+<div class="toc-meta">15 节 · 约 34 分钟</div>
+<ul>
+<li class="lvl2"><a href="#一-调研背景-需求与问题链">一、调研背景：需求与问题链</a></li>
+<li class="lvl2"><a href="#二-项目档案-dsh-是什么">二、项目档案：dsh 是什么</a></li>
+<li class="lvl2"><a href="#三-本机安装可行性-实测结论-可行-条件全绿">三、本机安装可行性：实测结论（可行，条件全绿）</a></li>
+<li class="lvl2"><a href="#四-Web-UI-与移动端适配">四、Web UI 与移动端适配</a></li>
+<li class="lvl2"><a href="#五-与在用-Harness-Hermes-对比-差异-优缺点-必要性">五、与在用 Harness（Hermes）对比：差异、优缺点、必要性</a></li>
+<li class="lvl3"><a href="#5-1-五个本质差异">5.1 五个本质差异</a></li>
+<li class="lvl3"><a href="#5-2-dsh-客观优点">5.2 dsh 客观优点</a></li>
+<li class="lvl3"><a href="#5-3-dsh-客观缺点-对本文用户场景">5.3 dsh 客观缺点（对本文用户场景）</a></li>
+<li class="lvl3"><a href="#5-4-必要性判定-不高-但有三个真实价值">5.4 必要性判定：不高，但有三个真实价值</a></li>
+<li class="lvl2"><a href="#六-记忆系统三方对比-dsh-vs-Hermes-vs-OpenClaw">六、记忆系统三方对比（dsh vs Hermes vs OpenClaw）</a></li>
+<li class="lvl2"><a href="#七-能否当个人助理-判定与门槛">七、能否当个人助理：判定与门槛</a></li>
+<li class="lvl2"><a href="#八-主-Harness-调度-dsh-链路设计与证据链">八、主 Harness 调度 dsh：链路设计与证据链</a></li>
+<li class="lvl2"><a href="#九-方案总结-三步走">九、方案总结：三步走</a></li>
+<li class="lvl2"><a href="#十-风险声明">十、风险声明</a></li>
+<li class="lvl2"><a href="#附录-信源清单">附录：信源清单</a></li>
+</ul>
+</div>
+<div class="content">
+<h1 id="top">DeepSeek Harness（dsh）全景调研报告</h1>
+<blockquote>调研主题：DeepSeek Harness 是什么 · 安卓本机安装可行性 · 与在用 Harness 的协同方案</blockquote>
+<blockquote>调研日期：2026-08-17</blockquote>
+<blockquote>调研方式：联网检索（官方仓库 / 官方文档 / 社区评测）+ 本机实测（Termux 环境逐项验证）</blockquote>
+<blockquote>报告版本：v1.0</blockquote>
+<hr>
+<h2 id="一-调研背景-需求与问题链">一、调研背景：需求与问题链 <a class="anchor" href="#一-调研背景-需求与问题链">#</a></h2>
+<p>用户当前的 AI 工作底座是一套运行在安卓手机 Termux 环境中的开源 Agent Harness（Hermes），日常用于：多平台消息中枢、生活档案管理、工作流自动化、定时任务、知识库检索等。本次调研由以下问题链驱动：</p>
+<p>1. DeepSeek Harness（下称 dsh）是什么项目？</p>
+<p>2. 能否安装到安卓手机本机？可行性如何？</p>
+<p>3. 它有没有适配手机的 Web UI？</p>
+<p>4. 界面风格是否与在用的 Harness WebUI 接近？</p>
+<p>5. 安装方式选哪种最优（AI 代装 / 电脑 USB / 手动 Linux）？</p>
+<p>6. 安装后与在用 Harness 的使用差异、优缺点、必要性、想象空间？</p>
+<p>7. 它能否当个人助理？门槛在哪？记忆系统与在用 Harness、OpenClaw 相比如何？</p>
+<p>8. 安装后，在用的 Harness 能否调度它（含 A2A 等工具），实现"用户 → 主 Harness → dsh → 执行 → 回传 → 报告"的链路？</p>
+<p><strong>核心痛点</strong>（调研要解开的）：</p>
+<ul>
+<li>现有工作流的重活（批量代码、网页迭代）消耗主力模型配额，想找廉价执行引擎分流；</li>
+</ul>
+<ul>
+<li>需要证据级过程留痕的任务，聊天记录式日志证明力不足；</li>
+</ul>
+<ul>
+<li>想知道"第二个 Harness"是替代品还是工具件——值不值得装、装了怎么用。</li>
+</ul>
+<hr>
+<h2 id="二-项目档案-dsh-是什么">二、项目档案：dsh 是什么 <a class="anchor" href="#二-项目档案-dsh-是什么">#</a></h2>
+<table>
+<thead><tr><th>项</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td>本体</td><td>DeepSeek Harness，命令名 <code>dsh</code>，深度求索官方开源智能体框架（Agent Harness）</td></tr>
+<tr><td>发布</td><td>2026-08-13 开发者预览版（v0.1.0-rc），MIT 协议</td></tr>
+<tr><td>定位</td><td>对标 Claude Code / Manus 层级的 Agent 基础设施，"Agent 界的 Android"</td></tr>
+<tr><td>架构</td><td>TypeScript + Cordis 插件组合系统，221 个包，"一切皆插件"——模型适配器、工具注册表、会话日志、甚至 Agent 主循环本身都是可替换插件</td></tr>
+<tr><td>使用</td><td><code>npx @deepseek-ai/dsh web</code> 启动 → 浏览器访问 <code>127.0.0.1:3080</code>；另有 <code>--profile headless</code> 一次性任务模式</td></tr>
+<tr><td>增长</td><td>开源 12 小时 GitHub 破 5 万 star；3 天内社区插件约 300 → 1000+ 个</td></tr>
+<tr><td>内置</td><td>四种 Agent 预设（标准/极简/代码/创造）、轨迹页（全程留痕）、会话底部实时 token 统计</td></tr>
+<tr><td>成熟度</td><td>rc 预览版，官方明示未来几个月将有破坏性变更</td></tr>
+</table>
+<p>数据来源：GitHub deepseek-ai/deepseek-harness、deepseek.com/harness、极客公园/36氪/澎湃等媒体评测（2026-08-13~17）。</p>
+<hr>
+<h2 id="三-本机安装可行性-实测结论-可行-条件全绿">三、本机安装可行性：实测结论（可行，条件全绿） <a class="anchor" href="#三-本机安装可行性-实测结论-可行-条件全绿">#</a></h2>
+<p>调研在目标安卓手机（Android 16，Termux 环境）上逐项实测：</p>
+<table>
+<thead><tr><th>检查项</th><th>dsh 官方要求</th><th>本机实测</th><th>判定</th></tr></thead>
+<tbody>
+<tr><td>Node.js</td><td><code>^22.19.0</code> 或 <code>>=24.0.0</code></td><td>v24.17.0 已在位</td><td>✅ 零改动</td></tr>
+<tr><td>架构</td><td>linux-arm64</td><td>aarch64，官方有 arm64 预编译件</td><td>✅</td></tr>
+<tr><td>Landlock 沙箱</td><td>Linux 内核特性</td><td>内核 6.12.58，syscall 实测 ABI 版本 6</td><td>✅ 原生支持</td></tr>
+<tr><td>依赖编译</td><td>—</td><td>主依赖树纯 JS，npm registry 直连正常</td><td>✅ 无原生编译坑</td></tr>
+<tr><td>内存 / 磁盘</td><td>—</td><td>14GB 内存（可用 6.5GB）/ 763GB 空闲</td><td>✅</td></tr>
+<tr><td>npm 包真实性</td><td>—</td><td><code>@deepseek-ai/dsh@0.1.0-rc.6</code> 元数据实拉确认</td><td>✅</td></tr>
+</table>
+<p><strong>执行沙箱验证</strong>（AI 代装路线的关键疑虑）：</p>
+<ul>
+<li>AI 终端与手机系统同网络命名空间（实测 <code>net:[4026531840]</code> = 系统主 ns）；</li>
+</ul>
+<ul>
+<li>终端内 <code>curl 127.0.0.1:8787</code>（在用 Harness WebUI）→ HTTP 200，1ms 连接；</li>
+</ul>
+<ul>
+<li>结论：<strong>AI 代装无沙箱障碍</strong>，起本地端口服务手机浏览器可达。</li>
+</ul>
+<p><strong>唯一硬前置</strong>：一枚 DeepSeek 官方 API Key（platform.deepseek.com 申请）。模型绑定 DeepSeek API（预览版多 provider 路径未开放文档）。</p>
+<p><strong>安装方式对比结论</strong>：AI 代装（最优，环境已勘测）＞手动 Termux（可行但无必要）＞电脑 USB 调试（纯绕路——dsh 不是 APK，adb shell 终点仍是同样命令）。</p>
+<hr>
+<h2 id="四-Web-UI-与移动端适配">四、Web UI 与移动端适配 <a class="anchor" href="#四-Web-UI-与移动端适配">#</a></h2>
+<ul>
+<li>官方<strong>无手机 App</strong>，只有 Web UI + 命令行两种形态；</li>
+</ul>
+<ul>
+<li>Web UI 为桌面优先设计：窄于 1024px 时侧边栏自动收窄，手机上展开抽屉会挤压主内容区（社区反馈"适配的不是很好"）；</li>
+</ul>
+<ul>
+<li>手机浏览器直接访问 <code>127.0.0.1:3080</code> 基础可用；</li>
+</ul>
+<ul>
+<li>社区移动适配插件已成熟涌现：<code>TecFancy/dsh-mobile</code>、<code>mexiaosqwq/dsh-web-mobile</code>（窄屏侧栏变 overlay 抽屉）、<code>zhu1090093659/dsh-web-ui</code>（皮肤中心+移动远程）等；</li>
+</ul>
+<ul>
+<li>界面风格：与在用的"本地端口 + 浏览器壳 + 会话流"同族——侧栏会话列表、中间对话流、底部输入框、过程留痕页。默认偏极简"毛坯"风，可装皮肤插件精装修。</li>
+</ul>
+<hr>
+<h2 id="五-与在用-Harness-Hermes-对比-差异-优缺点-必要性">五、与在用 Harness（Hermes）对比：差异、优缺点、必要性 <a class="anchor" href="#五-与在用-Harness-Hermes-对比-差异-优缺点-必要性">#</a></h2>
+<h3 id="5-1-五个本质差异">5.1 五个本质差异 <a class="anchor" href="#5-1-五个本质差异">#</a></h3>
+<table>
+<thead><tr><th>维度</th><th>在用 Harness（Hermes）</th><th>dsh</th></tr></thead>
+<tbody>
+<tr><td>定位</td><td>全场景管家：消息中枢+档案+工作流+定时任务</td><td>开发者工作台：把一件事做完交付</td></tr>
+<tr><td>触达通道</td><td>多平台 IM + WebUI + 眼镜端 + A2A，<strong>主动找用户</strong></td><td>仅浏览器开 3080，<strong>用户找它</strong></td></tr>
+<tr><td>记忆人格</td><td>持久记忆每轮注入 + 灵魂文件人格</td><td>无用户画像记忆，persona 仅一个字符串</td></tr>
+<tr><td>沉淀深度</td><td>上百个为用户定制的 skill（档案库、FTS5 检索、笔记镜像、发布流水线等）</td><td>生态爆发但全是通用件</td></tr>
+<tr><td>模型绑定</td><td>自有模型调度链</td><td>默认绑死 DeepSeek API</td></tr>
+</table>
+<h3 id="5-2-dsh-客观优点">5.2 dsh 客观优点 <a class="anchor" href="#5-2-dsh-客观优点">#</a></h3>
+<p>1. <strong>过程透明杀手级</strong>：轨迹页摊开系统提示词、思维链、每次工具调用与返回——"真查了还是脑补了"可对质（Hacker News 上被称 killer feature）；</p>
+<p>2. <strong>账目透明</strong>：每会话实时统计步数、耗时、token、缓存命中率；配合 V4-Flash 低价，性价比可视化；</p>
+<p>3. <strong>UI 想象空间</strong>：连前端都能整个换掉，皮肤/布局自由度极高；</p>
+<p>4. <strong>迭代速度</strong>：一夜 5 万星、三天千插件的生态势能；</p>
+<p>5. <strong>沙箱严格</strong>：Landlock 文件隔离 + 审批姿态系统，制度性防护更厚。</p>
+<h3 id="5-3-dsh-客观缺点-对本文用户场景">5.3 dsh 客观缺点（对本文用户场景） <a class="anchor" href="#5-3-dsh-客观缺点-对本文用户场景">#</a></h3>
+<p>1. rc 毛坯，破坏性变更在路上；</p>
+<p>2. 用户核心场景（生活档案、专业数据库、笔记镜像、IM 推送、眼镜端）那边全是空白，迁移成本远高于收益；</p>
+<p>3. 无跨会话记忆，不"认识"用户；</p>
+<p>4. 窄屏二等公民（需插件缓解）、无语音、无多端定时送达；</p>
+<p>5. token 消耗偏重（第三方对比：同任务消耗约为另一开源 harness Pi 的 3 倍）。</p>
+<h3 id="5-4-必要性判定-不高-但有三个真实价值">5.4 必要性判定：不高，但有三个真实价值 <a class="anchor" href="#5-4-必要性判定-不高-但有三个真实价值">#</a></h3>
+<p>① 尝鲜与视野；② DeepSeek 廉价算力的专用入口；③ 参照系（用它的轨迹页与计量反哺主 Harness 的改进）。<strong>定位应是"第二工作台/子引擎"，不是替代品。</strong></p>
+<hr>
+<h2 id="六-记忆系统三方对比-dsh-vs-Hermes-vs-OpenClaw">六、记忆系统三方对比（dsh vs Hermes vs OpenClaw） <a class="anchor" href="#六-记忆系统三方对比-dsh-vs-Hermes-vs-OpenClaw">#</a></h2>
+<table>
+<thead><tr><th>记忆维度</th><th>Hermes</th><th>OpenClaw（小龙虾）</th><th>dsh</th></tr></thead>
+<tbody>
+<tr><td>记忆载体</td><td>memory + user profile 双库每轮注入</td><td>纯 Markdown（USER.md / MEMORY.md / 每日 notes），无隐藏状态</td><td>append-only 会话事件流（记"过程"非"认识你"）</td></tr>
+<tr><td>用户画像</td><td>有，深度定制</td><td>有（指令式 + 生效/废止元数据）</td><td>无内建</td></tr>
+<tr><td>长期固化</td><td>手动策展</td><td><strong>Dreaming 后台自动提炼晋升</strong>（打分门槛+去重+人可审阅）——目前最自动化的实现</td><td>无内建，靠社区插件（auto-memory / Mnemon / Nowledge / Hindsight，发布均不足一周）</td></tr>
+<tr><td>跨会话检索</td><td>FTS5 会话库</td><td>memory_search 混合检索（向量+关键词）</td><td>tool-session-query（模型可翻查历史，但不自动想起）</td></tr>
+<tr><td>迁移性</td><td>—</td><td><strong>官方支持直接导入 Hermes 的 MEMORY.md/USER.md</strong></td><td>插件各搞各的，无标准</td></tr>
+</table>
+<p><strong>结论</strong>：记忆能力 OpenClaw ＞ Hermes ＞ dsh。dsh 哲学是"过程留痕"而非"认识主人"；要长期记忆必须装极早期社区插件，等生态稳定估计还需一两个月。</p>
+<hr>
+<h2 id="七-能否当个人助理-判定与门槛">七、能否当个人助理：判定与门槛 <a class="anchor" href="#七-能否当个人助理-判定与门槛">#</a></h2>
+<p><strong>判定：架构上能（一切皆插件，缺啥装啥），今天体验上是半成品助理。</strong></p>
+<table>
+<thead><tr><th>#</th><th>门槛</th><th>严重度</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>无跨会话用户记忆</td><td>🔴 高</td></tr>
+<tr><td>2</td><td>无消息通道（不能主动推送，仅浏览器）</td><td>🔴 高</td></tr>
+<tr><td>3</td><td>API Key 硬前置</td><td>🟡 中</td></tr>
+<tr><td>4</td><td>rc 版破坏性变更风险</td><td>🟡 中</td></tr>
+<tr><td>5</td><td>窄屏/无语音/定时任务弱</td><td>🟡 中</td></tr>
+<tr><td>6</td><td>中文能力（本土模型，术语误解率低）</td><td>🟢 无门槛</td></tr>
+</table>
+<p>个人助理赛道的正经选手是 OpenClaw（记忆系统完善 + 多端通道），dsh 的本命是开发者工作台。</p>
+<hr>
+<h2 id="八-主-Harness-调度-dsh-链路设计与证据链">八、主 Harness 调度 dsh：链路设计与证据链 <a class="anchor" href="#八-主-Harness-调度-dsh-链路设计与证据链">#</a></h2>
+<p><strong>总判定：能。两条官方通道 + 一条 CLI 通道，全部实证。</strong></p>
+<table>
+<thead><tr><th>通道</th><th>形态</th><th>证据状态</th></tr></thead>
+<tbody>
+<tr><td>① Python SDK（<code>deepseek-harness</code> 0.2.0）</td><td><code>with DeepSeekHarness(config): h.run("任务")</code> → <code>final_response</code>；API Key 走环境变量注入子进程</td><td>✅ PyPI 实拉确认</td></tr>
+<tr><td>② ACP 桥（<code>@deepseek-ai/dsh-acp</code> 0.0.1-rc.1）</td><td>开放标准 Agent Client Protocol：session/new → prompt → update 流式回传，含审批回调</td><td>✅ npm 实拉确认</td></tr>
+<tr><td>③ headless CLI</td><td><code>dsh --profile headless "任务"</code> 一次性执行，打印答案退出</td><td>✅ 官方文档</td></tr>
+<tr><td>④ A2A</td><td>dsh 官方不带 A2A 协议支持，社区桥接件尚未成熟</td><td>⚠️ 暂不可用</td></tr>
+</table>
+<p><strong>推荐链路（Python SDK 为主干）</strong>：</p>
+<pre><code class="language-">用户（<span class="tok-cls">IM</span> 或 <span class="tok-cls">WebUI</span>）
+   → 主 <span class="tok-cls">Harness</span> 解析意图 → <span class="tok-cls">Python</span> <span class="tok-cls">SDK</span> 拉起 dsh 子进程（stdio <span class="tok-cls">JSON</span>-<span class="tok-cls">RPC</span>）
+   → dsh 在 <span class="tok-cls">Landlock</span> 沙箱内执行（<span class="tok-cls">Bash</span>/文件/搜索，全程留痕）
+   → <span class="tok-fn">RunResult</span>(final_response, events, notifications) 回流
+   → 主 <span class="tok-cls">Harness</span> 摘要 + 轨迹要点 → 呈报用户</code></pre>
+<p>选 SDK 而非 ACP 的理由：SDK 通知流含 subagent.started/finished（可观测其内部子代理），Python 为主 Harness 母语，出错可直接读 stderr 尾部 400 行排障。ACP 的已知限制：仅新会话、仅基线文本输入、仅已提交回答、连接级生命周期。</p>
+<p><strong>已探明的小坑</strong>：TS SDK 文档示例引用的 <code>dsh-jsonrpc-agent</code> 子进程命令在 npm 为 404（实测），该入口仅存在于源码仓库场景；Python SDK 自管子进程拉起，不受影响。</p>
+<hr>
+<h2 id="九-方案总结-三步走">九、方案总结：三步走 <a class="anchor" href="#九-方案总结-三步走">#</a></h2>
+<p><strong>第一步（装）</strong>：<code>npm install -g @deepseek-ai/dsh</code> → 后台启动 <code>dsh web</code> → 验证 3080 端口 → 装移动适配插件（TecFancy/dsh-mobile 或同类）→ 用户配置 API Key 后浏览器即用。</p>
+<p><strong>第二步（联）</strong>：pip 装 <code>deepseek-harness</code> Python SDK → 主 Harness 写"调度脚本"封装成 skill（固定版本号防 rc 漂移）→ IM 一句话即可驱动 dsh 执行并回传。</p>
+<p><strong>第三步（养）</strong>：轻任务分流给 dsh（V4-Flash 廉价算力）；重活/精细活留在主 Harness；观察记忆插件生态，待 Mnemon/auto-memory 类插件稳定后再决定是否给 dsh 补长期记忆。</p>
+<p><strong>回退预案</strong>：web 起不来 → headless 模式；适配插件冲突 → 回官方裸 UI；npm 源慢 → npmmirror 镜像；SDK API 变 → 封装层单点修复。</p>
+<hr>
+<h2 id="十-风险声明">十、风险声明 <a class="anchor" href="#十-风险声明">#</a></h2>
+<p>1. 本报告基于 2026-08-17 时点信息，dsh 处于高速迭代期（rc.6 → rc.7 同日发布），具体 API/行为可能快速过时；</p>
+<p>2. token 消耗数据来自第三方对比（Composio 对照测试：同模型不同 harness 任务完成率差三成；Pi 对比：token 消耗差三倍），非官方基准；</p>
+<p>3. 社区插件的成熟度与安全均未审计，安装前需自行评估；</p>
+<p>4. 本报告已在发布前移除一切真实人名/单位/地名信息（内容自脱敏）。</p>
+<hr>
+<h2 id="附录-信源清单">附录：信源清单 <a class="anchor" href="#附录-信源清单">#</a></h2>
+<ul>
+<li>GitHub：<code>deepseek-ai/deepseek-harness</code>（README / docs / zread 索引镜像）</li>
+</ul>
+<ul>
+<li>官方：<code>deepseek.com/harness/en/</code>（developer preview 公告）</li>
+</ul>
+<ul>
+<li>npm：<code>@deepseek-ai/dsh</code>、<code>@deepseek-ai/dsh-sdk-client</code>、<code>@deepseek-ai/dsh-acp</code> 包元数据（本机实拉）</li>
+</ul>
+<ul>
+<li>PyPI：<code>deepseek-harness</code> 0.2.0（本机实拉）</li>
+</ul>
+<ul>
+<li>媒体评测：极客公园《一夜 5 万星，Agent 界的 Android 来了》、36氪、澎湃新闻（2026-08-13~15）</li>
+</ul>
+<ul>
+<li>社区：linux.do 移动端适配讨论、awesome-deepseek-harness 插件清单、ai-indeed.com Termux 方案实测（2026-08-16）</li>
+</ul>
+<ul>
+<li>OpenClaw 官方文档：<code>docs.openclaw.ai/concepts/memory</code></li>
+</ul>
+<ul>
+<li>本机实测：Termux 环境（Android 16 / 内核 6.12.58 / Node v24.17.0 / aarch64），全部检查项于 2026-08-17 执行</li>
+</ul>
+<div class="footer">
+通过 <a href="#top">magic-talk-publish</a> 流水线生成 · v3 双色暗色主题 · 暗/亮模式可切换
+</div>
+</div>
+</div>
+
+<script>
+// 主题切换（localStorage 持久化）
+(function() {
+  const saved = localStorage.getItem('m3-theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+  const btn = document.getElementById('themeToggle');
+  btn.textContent = saved === 'dark' ? '☀️' : '🌙';
+  btn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('m3-theme', next);
+    btn.textContent = next === 'dark' ? '☀️' : '🌙';
+  });
+})();
+
+// 阅读进度条
+(function() {
+  const bar = document.getElementById('readProgress');
+  const update = () => {
+    const h = document.documentElement;
+    const pct = (h.scrollTop / (h.scrollHeight - h.clientHeight)) * 100;
+    bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  };
+  document.addEventListener('scroll', update);
+  update();
+})();
+
+// 回到顶部按钮
+(function() {
+  const btn = document.getElementById('scrollTop');
+  const update = () => {
+    btn.classList.toggle('visible', window.scrollY > 500);
+  };
+  document.addEventListener('scroll', update);
+  btn.addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+})();
+
+// TOC scroll-spy（高亮当前章节）
+(function() {
+  const links = document.querySelectorAll('.toc a[href^="#"]');
+  if (links.length === 0) return;
+  const targets = Array.from(links).map(l => {
+    const id = l.getAttribute('href').slice(1);
+    return { link: l, el: document.getElementById(id) };
+  }).filter(t => t.el);
+  if (targets.length === 0) return;
+  const update = () => {
+    const scrollY = window.scrollY + 100;
+    let active = null;
+    for (const t of targets) {
+      if (t.el.offsetTop <= scrollY) active = t;
+    }
+    links.forEach(l => l.classList.remove('active'));
+    if (active) active.link.classList.add('active');
+  };
+  document.addEventListener('scroll', update);
+  update();
+})();
+
+// 代码块复制
+(function() {
+  document.querySelectorAll('pre').forEach(pre => {
+    const wrap = document.createElement('div');
+    wrap.className = 'code-block-wrap';
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.textContent = '复制';
+    wrap.appendChild(btn);
+    btn.addEventListener('click', async () => {
+      const code = pre.querySelector('code')?.innerText || pre.innerText;
+      try {
+        await navigator.clipboard.writeText(code);
+        btn.textContent = '已复制';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500);
+      } catch(e) {
+        btn.textContent = '失败';
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>
